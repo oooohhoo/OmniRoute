@@ -23,8 +23,7 @@ jobs:
       - name: Build and push
         run: |
           SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-
-          IMAGE="gitea.oooohhoo.top:8443/${{ github.repository }}/omniroute"
+          IMAGE="gitea.oooohhoo.top:8443/oooohhoo/omniroute"
 
           docker build \
             -t "${IMAGE}:opus55" \
