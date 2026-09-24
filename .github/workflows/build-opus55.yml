@@ -5,6 +5,10 @@ on:
     branches: [ opus55 ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -13,22 +17,18 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Login to Gitea Container Registry
-        run: |
-          echo "${{ secrets.GITEA_TOKEN }}" | \
-            docker login gitea.oooohhoo.top:8443 \
-            -u "${{ secrets.GITEA_USERNAME }}" \
-            --password-stdin
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Build and push
-        run: |
-          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-          IMAGE="gitea.oooohhoo.top:8443/oooohhoo/omniroute"
-
-          docker build \
-            -t "${IMAGE}:opus55" \
-            -t "${IMAGE}:opus55-${SHORT_SHA}" \
-            .
-
-          docker push "${IMAGE}:opus55"
-          docker push "${IMAGE}:opus55-${SHORT_SHA}"
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository_owner }}/omniroute:opus55
+            ghcr.io/${{ github.repository_owner }}/omniroute:opus55-${{ github.sha }}
