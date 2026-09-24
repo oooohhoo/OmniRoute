@@ -1,0 +1,35 @@
+name: Build OmniRoute Opus 5.5
+
+on:
+  push:
+    branches: [ opus55 ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Login to Gitea Container Registry
+        run: |
+          echo "${{ secrets.GITEA_TOKEN }}" | \
+            docker login gitea.oooohhoo.top:8443 \
+            -u "${{ secrets.GITEA_USERNAME }}" \
+            --password-stdin
+
+      - name: Build and push
+        run: |
+          SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
+
+          IMAGE="gitea.oooohhoo.top:8443/${{ github.repository }}/omniroute"
+
+          docker build \
+            -t "${IMAGE}:opus55" \
+            -t "${IMAGE}:opus55-${SHORT_SHA}" \
+            .
+
+          docker push "${IMAGE}:opus55"
+          docker push "${IMAGE}:opus55-${SHORT_SHA}"
