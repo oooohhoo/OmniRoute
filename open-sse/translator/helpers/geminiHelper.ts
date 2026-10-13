@@ -657,7 +657,15 @@ function convertEnumValuesToStrings(obj: unknown): void {
     if (record.type === "integer" || record.type === "number") {
       delete record.enum;
     } else {
-      record.enum = record.enum.map((v: unknown) => String(v));
+      // Gemini rejects an empty string inside `enum` ("enum[N]: cannot be empty"). Some MCP servers
+      // declare optional choices as ["a", "b", ""]; drop the empty value, and the whole enum when
+      // that was its only value, instead of failing every request that carries the tool.
+      const values = record.enum.map((v: unknown) => String(v)).filter((v) => v !== "");
+      if (values.length > 0) {
+        record.enum = values;
+      } else {
+        delete record.enum;
+      }
       if (!record.type) {
         record.type = "string";
       }
