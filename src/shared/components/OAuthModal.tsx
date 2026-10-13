@@ -54,6 +54,12 @@ const DEVICE_CODE_PROVIDERS = new Set([
   "ghe-copilot",
   "grok-cli",
   "muse-code",
+  // #14212: WorkBuddy is a device_code provider (its own module — not an alias
+  // of codebuddy-cn). Omitting it here made startOAuthFlow fall through to the
+  // browser-authorize branch, which correctly answers authUrl: null for
+  // device_code providers, and the modal then surfaced "browser OAuth is
+  // unavailable" instead of the device-code panel.
+  "workbuddy",
 ]);
 
 const TOKEN_PASTE_PROVIDERS = new Set(["devin-desktop", "devin-cli", "grok-cli", "claude"]);
