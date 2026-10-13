@@ -1,0 +1,312 @@
+name: Fork Release
+
+# Fork-only release pipeline.
+#
+# Why this exists: upstream (diegosouzapw/OmniRoute) has not cut a release we can
+# install, and every official publish path is unusable from a fork:
+#
+#   - npm-publish.yml: `auto` mode needs npm Trusted Publishing bound to
+#     owner `diegosouzapw` (a fork can never be a Trusted Publisher for the
+#     upstream `omniroute` package); `staged`/`direct` need an NPM_TOKEN; and the
+#     GitHub Packages leg hard-codes `@diegosouzapw/omniroute` (npm-publish.yml:374).
+#   - docker-publish.yml: hard-codes `diegosouzapw/omniroute` in three places
+#     (docker-publish.yml:63, 222-223, 425-426) and needs Docker Hub creds we
+#     do not have. Its run on release/v3.8.52 in this fork is green only because
+#     `prepare` resolves `skip=true` and every build job is `skipped`.
+#   - build.yml / preview-artifact.yml: build straight `next build` on the
+#     runner, which OOM-kills the hosted 16 GB box (19 of 30 runs; build.yml:3-11).
+#
+# What this does instead: build through the Dockerfile, whose builder stage is
+# already tuned to fit a hosted runner (OMNIROUTE_BUILD_MEMORY_MB=6144 +
+# OMNIROUTE_BUILD_WORKERS=2 → 1 worker ≈ 9 GB peak, Dockerfile:198-231). The
+# same build shape is already proven on this fork: build-opus55.yml ran the
+# Docker build on ubuntu-latest in 712 s and pushed to GHCR successfully.
+# The tarball/npm/Electron legs are deliberately absent — see "Not built here".
+#
+# Everything is namespaced to the FORK owner via `github.repository_owner`, so
+# the images land in the fork's own GHCR namespace and nothing is pushed upstream.
+#
+# Usage:
+#   Actions → Fork Release → Run workflow → version 3.8.52
+# or push a tag:  git tag v3.8.52 && git push origin v3.8.52
+#
+# Result:
+#   ghcr.io/<you>/omniroute:3.8.52      (also :<version>-<sha7>)
+#   GitHub Release v3.8.52 in this fork
+#   docker run -p 20128:20128 ghcr.io/<you>/omniroute:3.8.52
+#
+# Not built here (by design, all upstream-only):
+#   - npm tarball / npm publish  → npm-publish.yml gates on upstream identity
+#   - Docker Hub                 → no DOCKERHUB_* secrets in a fork
+#   - Electron installers        → electron-release.yml's `release` job is
+#     reusable, but its publish-npm leg is not; add it separately if you want
+#     desktop binaries.
+#
+# Heads-up on cascade: creating the GitHub Release fires the `release` event,
+# which starts lock-released-branch.yml (fails without BRANCH_LOCK_TOKEN) and
+# docker-publish.yml (fails at the Docker Hub login). Both are upstream-only
+# workflows this fork cannot satisfy — they are noise here, not a result. This
+# workflow does not wait on them.
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Version to release, e.g. 3.8.52 (with or without a leading v)"
+        required: true
+        type: string
+      target:
+        description: "Dockerfile stage to build. runner-cli = base server + agent CLIs (codex/claude-code/droid/openclaw); runner-web = base server + Playwright Chromium."
+        required: false
+        default: "runner-cli"
+        type: choice
+        options:
+          - runner-cli
+          - runner-web
+      prerelease:
+        description: "Mark the GitHub Release as a pre-release"
+        required: false
+        default: false
+        type: boolean
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: fork-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-and-release:
+    name: Build image and cut release
+    runs-on: ubuntu-latest
+    # The Docker build alone measured 712 s on this fork's runner. 90 min leaves
+    # room for the smoke test and the GHCR push without being an unbounded wait.
+    timeout-minutes: 90
+    permissions:
+      contents: write # create the git tag + the GitHub Release
+      packages: write # push to ghcr.io
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          # Full history: the release-notes diff needs the previous tag.
+          # No credential is persisted: the release step creates the git tag via
+          # `gh release create --target` using GH_TOKEN, not the checkout remote.
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Resolve version and target
+        id: resolve
+        env:
+          # Inputs arrive via env only — never interpolated into the script body.
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          INPUT_VERSION: ${{ inputs.version }}
+          INPUT_TARGET: ${{ inputs.target }}
+        run: |
+          set -euo pipefail
+
+          # Dispatch passes an explicit version; a tag push derives it from the tag.
+          VERSION="${INPUT_VERSION:-}"
+          if [ -z "$VERSION" ]; then
+            VERSION="$REF_NAME"
+          fi
+          VERSION="${VERSION#v}"
+          if ! printf '%s' "$VERSION" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+([.-][A-Za-z0-9.-]+)?$'; then
+            echo "Refusing unsafe VERSION value: ${VERSION}" >&2
+            exit 1
+          fi
+
+          TARGET="${INPUT_TARGET:-runner-cli}"
+
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "target=${TARGET}" >> "$GITHUB_OUTPUT"
+          echo "Resolved version=${VERSION} target=${TARGET}"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Build image
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          TARGET: ${{ steps.resolve.outputs.target }}
+          REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/omniroute
+          # Build through the Dockerfile rather than a bare `next build` on the
+          # runner: the builder stage already carries the hosted-runner memory
+          # budget (Dockerfile:198-231). Do not raise these — a next-build peaks
+          # at 14–16 GB RSS and the hosted box is killed mid-build.
+          OMNIROUTE_BUILD_MEMORY_MB: "6144"
+          OMNIROUTE_BUILD_WORKERS: "2"
+        run: |
+          set -euo pipefail
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          docker buildx build \
+            --target "$TARGET" \
+            --build-arg OMNIROUTE_BUILD_MEMORY_MB="$OMNIROUTE_BUILD_MEMORY_MB" \
+            --build-arg OMNIROUTE_BUILD_WORKERS="$OMNIROUTE_BUILD_WORKERS" \
+            --load \
+            --tag "${REGISTRY_IMAGE}:${VERSION}" \
+            --tag "${REGISTRY_IMAGE}:${VERSION}-${SHORT_SHA}" \
+            --tag "${REGISTRY_IMAGE}:sha-${SHORT_SHA}" \
+            .
+
+      - name: Smoke-test the image before publishing anything
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/omniroute
+        run: |
+          set -euo pipefail
+          # Same shape as docker-publish.yml's proven smoke step: wait on the
+          # image's own HEALTHCHECK (/healthz, in-memory, Dockerfile:313) instead
+          # of guessing a sleep, and dump logs on either failure mode.
+          container="omniroute-smoke-${VERSION//[^a-zA-Z0-9_.-]/-}"
+          trap 'docker rm -f "$container" >/dev/null 2>&1 || true' EXIT
+          docker run --detach --name "$container" "${REGISTRY_IMAGE}:${VERSION}"
+          for _ in $(seq 1 60); do
+            status="$(docker inspect --format '{{.State.Health.Status}}' "$container")"
+            if [ "$status" = "healthy" ]; then
+              echo "::notice::image ${REGISTRY_IMAGE}:${VERSION} reached healthy"
+              exit 0
+            fi
+            if [ "$status" = "unhealthy" ] || \
+               [ "$(docker inspect --format '{{.State.Status}}' "$container")" = "exited" ]; then
+              echo "::error::container is ${status}/exited — logs follow" >&2
+              docker logs "$container" || true
+              exit 1
+            fi
+            sleep 5
+          done
+          echo "::error::image never became healthy" >&2
+          docker logs "$container" || true
+          exit 1
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Push image to the fork's GHCR
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/omniroute
+        run: |
+          set -euo pipefail
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          docker push "${REGISTRY_IMAGE}:${VERSION}"
+          docker push "${REGISTRY_IMAGE}:${VERSION}-${SHORT_SHA}"
+          docker push "${REGISTRY_IMAGE}:sha-${SHORT_SHA}"
+
+      - name: Collect release notes
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          # Passed via env, never interpolated into the script body (zizmor
+          # template-injection class).
+          REPO_OWNER: ${{ github.repository_owner }}
+        run: |
+          set -euo pipefail
+          SHORT_SHA="$(git rev-parse --short HEAD)"
+          TAG="v${VERSION}"
+
+          # Newest v* tag reachable from HEAD, excluding the tag being cut.
+          # Must skip $TAG itself: on the tag-push path that tag already exists
+          # and pointing PREV_TAG at it would render an EMPTY changelog
+          # (`git log PREV_TAG..HEAD` = nothing). On the workflow_dispatch path
+          # the tag does not exist yet, and the loop simply skips a no-op match.
+          PREV_TAG=""
+          for candidate in $(git tag --list 'v*' --sort=-creatordate --merged HEAD); do
+            if [ "$candidate" = "$TAG" ]; then
+              continue
+            fi
+            PREV_TAG="$candidate"
+            break
+          done
+
+          {
+            echo "## OmniRoute v${VERSION} (fork build)"
+            echo
+            if [ -n "$PREV_TAG" ]; then
+              echo "Changes since \`${PREV_TAG}\`:"
+              echo
+              git log --no-merges --pretty='- %s (%h)' "${PREV_TAG}..HEAD" | head -200
+            else
+              echo "_No previous \`v*\` tag found — this is the first tagged release on this branch._"
+              echo
+              echo "Recent commits:"
+              echo
+              git log --no-merges --pretty='- %s (%h)' -n 50 HEAD
+            fi
+            echo
+            echo "## Docker image"
+            echo
+            echo '```bash'
+            echo "docker run -d -p 20128:20128 \\"
+            echo "  -v omniroute-data:/app/data \\"
+            echo "  ghcr.io/${REPO_OWNER}/omniroute:${VERSION}"
+            echo '```'
+            echo
+            echo "Tags: \`:${VERSION}\`, \`:${VERSION}-${SHORT_SHA}\`, \`:sha-${SHORT_SHA}\`"
+            echo "Commit: \`${SHORT_SHA}\`"
+            echo
+            echo "---"
+            echo
+            echo "_Fork build — not published to npm, Docker Hub or upstream releases._"
+          } > release-notes.md
+          echo "wrote release-notes.md ($(wc -l < release-notes.md) lines)"
+
+      - name: Create the GitHub Release
+        env:
+          TAG: v${{ steps.resolve.outputs.version }}
+          VERSION: ${{ steps.resolve.outputs.version }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PRERELEASE: ${{ inputs.prerelease }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          PRERELEASE_FLAG=""
+          if [ "${PRERELEASE:-false}" = "true" ]; then
+            PRERELEASE_FLAG="--prerelease"
+          fi
+          # Idempotent: re-running after a partially failed run reuses the release
+          # instead of failing on "tag already exists".
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            echo "Release ${TAG} already exists — updating notes and flags."
+            gh release edit "$TAG" --repo "$REPO" \
+              --notes-file release-notes.md $PRERELEASE_FLAG
+            exit 0
+          fi
+          # --target pins the new tag to the exact commit this run built, rather
+          # than whatever the default branch points at by the time this runs.
+          gh release create "$TAG" --repo "$REPO" \
+            --target "${GITHUB_SHA}" \
+            --title "${TAG}" \
+            --notes-file release-notes.md $PRERELEASE_FLAG
+
+      - name: Publish a run summary
+        env:
+          VERSION: ${{ steps.resolve.outputs.version }}
+          REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/omniroute
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          {
+            echo "## Fork release v${VERSION}"
+            echo
+            echo "| | |"
+            echo "| --- | --- |"
+            echo "| Image | \`${REGISTRY_IMAGE}:${VERSION}\` |"
+            echo "| Commit | \`$(git rev-parse --short HEAD)\` |"
+            echo "| Release | https://github.com/${REPO}/releases/tag/v${VERSION} |"
+            echo
+            echo "### Pull and run"
+            echo
+            echo '```bash'
+            echo "docker pull ${REGISTRY_IMAGE}:${VERSION}"
+            echo "docker run -d -p 20128:20128 -v omniroute-data:/app/data ${REGISTRY_IMAGE}:${VERSION}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
