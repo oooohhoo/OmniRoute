@@ -37,6 +37,22 @@ const ALIBABA_MODEL_STUDIO_MODEL_IDS = new Set(
   ALIBABA_MODEL_STUDIO_MODELS.map((model) => model.id)
 );
 
+/**
+ * User-Agent for WorkBuddy's GET /v3/config catalogue.
+ *
+ * The endpoint parses a client version out of the UA and refuses a request
+ * without one (400 / code 12403). Shape is the official desktop client's:
+ * `WorkBuddy/<client> <platform>/<client> CLI/<cli>`. The platform segment is
+ * `WorkBuddy AI` because WorkBuddy connections here are global-realm
+ * (www.workbuddy.ai) — the CN segment is `WorkBuddy`, and sending it from a
+ * global account risks the upstream `403 code 11140 "request illegal"` control.
+ *
+ * Verified live (2026-10-13): this UA returns 31 catalogue entries (29 after
+ * the media-model filter); an IDE-shaped UA returns only 13.
+ */
+export const WORKBUDDY_DISCOVERY_USER_AGENT =
+  "WorkBuddy/5.5.4 WorkBuddy AI/5.5.4 CLI/2.137.1";
+
 export { isDashscopeTextModelId };
 
 export function parseDashscopeTextModels(data: any): any[] {
@@ -943,7 +959,22 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
   workbuddy: {
     url: "https://www.workbuddy.ai/v3/config",
     method: "GET",
-    headers: { "Content-Type": "application/json", "X-Product": "SaaS" },
+    // #14212 follow-up: /v3/config refuses a request with no User-Agent —
+    // 400 `code 12403 "check ua, get coding copilot version error"` (verified
+    // live 2026-10-13), which surfaced in the dashboard as "Failed to fetch
+    // models: 400". The endpoint parses a client version out of the UA and
+    // varies the roster by it: the desktop/CLI shape below returns 31 entries
+    // (29 chat once the media models are filtered), while an IDE-shaped UA
+    // returns only 13 — mostly role aliases plus image/video models.
+    //
+    // The platform segment is "WorkBuddy AI" because these are global-realm
+    // accounts (www.workbuddy.ai); sending the CN segment ("WorkBuddy") risks
+    // the upstream `403 code 11140 "request illegal"` risk control.
+    headers: {
+      "Content-Type": "application/json",
+      "X-Product": "SaaS",
+      "User-Agent": WORKBUDDY_DISCOVERY_USER_AGENT,
+    },
     authHeader: "Authorization",
     authPrefix: "Bearer ",
     parseResponse: (data) => normalizeWorkbuddyModelsResponse(data),
