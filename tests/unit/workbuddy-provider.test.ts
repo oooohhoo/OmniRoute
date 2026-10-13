@@ -302,6 +302,25 @@ describe("model discovery", () => {
     assert.equal(config.authPrefix, "Bearer ");
   });
 
+  // #14212 follow-up: GET /v3/config answers 400 `code 12403
+  // "check ua, get coding copilot version error"` when no User-Agent is sent,
+  // which reaches the dashboard as "Failed to fetch models: 400". The endpoint
+  // parses a client version out of the UA, so this header is required, not
+  // cosmetic — and the roster size depends on which UA is sent (the desktop
+  // shape below yields 31 entries / 29 chat; an IDE shape yields 13).
+  it("sends a User-Agent on /v3/config (400 code 12403 without one)", () => {
+    const config = PROVIDER_MODELS_CONFIG.workbuddy;
+    const ua = config.headers["User-Agent"];
+    assert.equal(typeof ua, "string", "discovery must send a User-Agent");
+    assert.ok(ua.length > 0, "User-Agent must not be empty");
+    // The endpoint derives the client version from the UA, so it must carry a
+    // parseable semver-ish segment.
+    assert.match(ua, /\d+\.\d+\.\d+/, "User-Agent must carry a version the gateway can parse");
+    // Global-realm accounts (www.workbuddy.ai) must use the "WorkBuddy AI"
+    // platform segment; the CN segment risks 403 code 11140.
+    assert.match(ua, /WorkBuddy AI\//, "global realm requires the 'WorkBuddy AI' platform segment");
+  });
+
   it("maps the catalogue payload to ids and names", () => {
     const payload = {
       code: 0,
