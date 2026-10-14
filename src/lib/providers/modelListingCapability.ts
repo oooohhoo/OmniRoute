@@ -22,9 +22,14 @@ const CURATED_MODEL_ONLY_PROVIDERS = new Set<string>([
   // The clean-room browser integration exposes only model/effort routes
   // observed in the first-party picker. It has no upstream model-list API.
   "chatgpt-web",
-  // CodeBuddy gateways (Tencent CN and intl) publish no model-catalog endpoint;
-  // their registry models are the complete curated lineup.
-  "codebuddy-cn",
+  // CodeBuddy *international* publishes no model-catalog endpoint: /v3/config and
+  // /console/enterprises/personal/models both fail there (500 from the edge),
+  // so its registry models remain the complete curated lineup.
+  //
+  // CodeBuddy CN is deliberately NOT curated: its CN gateway answers
+  // GET /console/enterprises/personal/models with 32 entries (31 usable for chat)
+  // — roughly double the 16-model curated registry — and is discovered live via
+  // PROVIDER_MODELS_CONFIG["codebuddy-cn"].
   "codebuddy-intl",
 ]);
 

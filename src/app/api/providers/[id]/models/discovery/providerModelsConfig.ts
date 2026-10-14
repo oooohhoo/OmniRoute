@@ -1,4 +1,5 @@
 import { getAntigravityModelsDiscoveryUrls } from "@omniroute/open-sse/config/antigravityUpstream.ts";
+import { CODEBUDDY_CN_USER_AGENT } from "@/lib/oauth/constants/oauth";
 import {
   getGrokBuildModelsHeaders,
   GROK_BUILD_MODELS_URL,
@@ -30,7 +31,11 @@ import { buildOpencodeBackgroundHeaders } from "@omniroute/open-sse/utils/openco
 import { isFeatureFlagEnabled } from "@/shared/utils/featureFlags";
 import { applyConnectionCustomHeaders } from "./connectionCustomHeaders";
 import { buildChatPlaygroundModelsDiscoveryEntry } from "@omniroute/open-sse/services/chatplaygroundModels.ts";
-import { normalizeOpenAiLikeModelsResponse, normalizeWorkbuddyModelsResponse } from "./normalizers";
+import {
+  normalizeCodebuddyCnModelsResponse,
+  normalizeOpenAiLikeModelsResponse,
+  normalizeWorkbuddyModelsResponse,
+} from "./normalizers";
 
 const QWEN_CLOUD_TEXT_MODEL_IDS = new Set(QWEN_CLOUD_TEXT_MODELS.map((model) => model.id));
 const ALIBABA_MODEL_STUDIO_MODEL_IDS = new Set(
@@ -818,6 +823,27 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
     method: "GET",
     headers: { Accept: "application/json" },
     parseResponse: parseClinepassRecommendedModels,
+  },
+  // CodeBuddy CN DOES publish a live catalogue — GET
+  // /console/enterprises/personal/models returns 32 entries (31 usable for chat).
+  // The old "publishes no model-catalog endpoint" note was only true of the intl
+  // gateway, so the CN registry was capped at its 16 curated models and the
+  // dashboard showed no import button. See normalizeCodebuddyCnModelsResponse.
+  "codebuddy-cn": {
+    url: "https://copilot.tencent.com/console/enterprises/personal/models",
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "User-Agent": CODEBUDDY_CN_USER_AGENT,
+      Origin: "https://www.codebuddy.cn",
+      Referer: "https://www.codebuddy.cn/",
+      "X-Requested-With": "XMLHttpRequest",
+      "X-Product": "SaaS",
+    },
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    parseResponse: (data) => normalizeCodebuddyCnModelsResponse(data),
   },
   // Perplexity's /v1/models lists the Agent API catalog (vendor-prefixed agent
   // ids), but chat only accepts the Sonar family on /chat/completions. Import

@@ -382,6 +382,44 @@ function isWorkbuddyMediaModel(item: Record<string, unknown>): boolean {
   return tags.every((tag) => typeof tag === "string" && WORKBUDDY_MEDIA_TAGS.has(tag));
 }
 
+/**
+ * CodeBuddy CN catalogue — GET /console/enterprises/personal/models.
+ *
+ * Verified live against copilot.tencent.com (2026-10-14): 32 entries, 31 usable
+ * for chat once the one media-only model (`hunyuan-image-alpha`, tagged
+ * `text-to-image`) is dropped. The registry's curated list carried only 16, so
+ * half the roster was invisible to the dashboard.
+ *
+ * Same media-tag exclusion as the WorkBuddy normalizer: the gateway mixes image
+ * models into the same `models` array and only `tags` distinguishes them.
+ *
+ * Entries carry no explicit `owned_by`; they are all first-party CodeBuddy.
+ */
+export function normalizeCodebuddyCnModelsResponse(
+  data: unknown
+): Array<{ id: string; name: string; owned_by: string }> {
+  const root = asRecord(data);
+  const inner = asRecord(root.data);
+  const payload = inner.models ?? root.models;
+
+  const items: unknown[] = Array.isArray(payload)
+    ? payload
+    : payload && typeof payload === "object"
+      ? Object.entries(asRecord(payload)).map(([id, value]) => ({ id, ...asRecord(value) }))
+      : [];
+
+  return items
+    .map((value) => {
+      const item = asRecord(value);
+      const id = toNonEmptyString(item.id) || toNonEmptyString(item.model);
+      if (!id) return null;
+      if (isWorkbuddyMediaModel(item)) return null;
+      const name = toNonEmptyString(item.name) || toNonEmptyString(item.displayName) || id;
+      return { id, name, owned_by: "codebuddy" };
+    })
+    .filter((value): value is { id: string; name: string; owned_by: string } => Boolean(value));
+}
+
 export function normalizeSapModelsResponse(
   data: unknown
 ): Array<{ id: string; name: string; owned_by: string }> {
