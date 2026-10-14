@@ -33,6 +33,7 @@ import { applyConnectionCustomHeaders } from "./connectionCustomHeaders";
 import { buildChatPlaygroundModelsDiscoveryEntry } from "@omniroute/open-sse/services/chatplaygroundModels.ts";
 import {
   normalizeCodebuddyCnModelsResponse,
+  normalizeCodebuddyIntlModelsResponse,
   normalizeOpenAiLikeModelsResponse,
   normalizeWorkbuddyModelsResponse,
 } from "./normalizers";
@@ -56,6 +57,18 @@ const ALIBABA_MODEL_STUDIO_MODEL_IDS = new Set(
  * the media-model filter); an IDE-shaped UA returns only 13.
  */
 export const WORKBUDDY_DISCOVERY_USER_AGENT =
+  "WorkBuddy/5.5.4 WorkBuddy AI/5.5.4 CLI/2.137.1";
+
+/**
+ * User-Agent for CodeBuddy International's GET /v3/config catalogue.
+ *
+ * This endpoint varies the roster by UA. Verified live (2026-10-14): the desktop
+ * shape below returns 28 entries (26 usable for chat); the CLI shape the intl
+ * registry sends with chat traffic returns only 20; the registry's
+ * `IDE/2.108.1 CodeBuddy/2.108.1` returns none at all. Discovery therefore pins
+ * the desktop shape instead of reusing CODEBUDDY_INTL_USER_AGENT.
+ */
+export const CODEBUDDY_INTL_DISCOVERY_USER_AGENT =
   "WorkBuddy/5.5.4 WorkBuddy AI/5.5.4 CLI/2.137.1";
 
 export { isDashscopeTextModelId };
@@ -844,6 +857,32 @@ export const PROVIDER_MODELS_CONFIG: Record<string, ProviderModelsConfigEntry> =
     authHeader: "Authorization",
     authPrefix: "Bearer ",
     parseResponse: (data) => normalizeCodebuddyCnModelsResponse(data),
+  },
+  // CodeBuddy *international* also publishes a live catalogue, but on a
+  // different path: GET /v3/config (verified live 2026-10-14, 28 entries / 26
+  // usable for chat). Its /console/enterprises/personal/models route instead
+  // 500s from the edge under every header combination tried, so CN's endpoint
+  // cannot be reused here.
+  //
+  // The UA matters: this desktop shape yields 26 chat models, the CLI shape the
+  // registry uses for chat traffic yields only 20, and an IDE shape returns
+  // none. Discovery therefore pins the desktop UA rather than reusing
+  // CODEBUDDY_INTL_USER_AGENT.
+  "codebuddy-intl": {
+    url: "https://www.codebuddy.ai/v3/config",
+    method: "GET",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "application/json",
+      "User-Agent": CODEBUDDY_INTL_DISCOVERY_USER_AGENT,
+      Origin: "https://www.codebuddy.ai",
+      Referer: "https://www.codebuddy.ai/",
+      "X-Requested-With": "XMLHttpRequest",
+      "X-Product": "SaaS",
+    },
+    authHeader: "Authorization",
+    authPrefix: "Bearer ",
+    parseResponse: (data) => normalizeCodebuddyIntlModelsResponse(data),
   },
   // Perplexity's /v1/models lists the Agent API catalog (vendor-prefixed agent
   // ids), but chat only accepts the Sonar family on /chat/completions. Import

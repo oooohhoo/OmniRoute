@@ -6,12 +6,17 @@ import { getDiscoveryClass } from "../../src/lib/providerModels/discoveryClass.t
 import { providerUsesCuratedModelsOnly } from "../../src/lib/providers/modelListingCapability.ts";
 
 /**
- * CodeBuddy CN publishes a live catalogue, contrary to what the curated-model
- * list used to assert. Verified against copilot.tencent.com (2026-10-14):
- *   GET /console/enterprises/personal/models -> 200, 32 entries
- *   31 usable for chat (one media-only model is filtered)
- * while the curated registry carried only 16. The provider was therefore listed
- * as `static-only`, which is what hid the dashboard's "Import Models" button.
+ * Both CodeBuddy gateways publish a live catalogue, contrary to what the
+ * curated-model list used to assert. Verified live (2026-10-14):
+ *   CN   GET copilot.tencent.com/console/enterprises/personal/models -> 200, 32
+ *        entries, 31 usable for chat (one media-only model filtered)
+ *   intl GET www.codebuddy.ai/v3/config                             -> 200, 28
+ *        entries, 26 usable for chat
+ * The curated registries carried 16 and 22 respectively, and being classified
+ * `static-only` is what hid the dashboard's "Import Models" button.
+ *
+ * The two gateways do NOT share an endpoint: intl's /console/enterprises path
+ * 500s from the edge under every header combination tried.
  */
 describe("codebuddy-cn model discovery", () => {
   it("is no longer curated-only, so the dashboard offers model import", () => {
@@ -21,10 +26,6 @@ describe("codebuddy-cn model discovery", () => {
       "codebuddy-cn must be discoverable — its gateway serves a live catalogue"
     );
     assert.equal(getDiscoveryClass("codebuddy-cn"), "openai-compat");
-  });
-
-  it("leaves codebuddy-intl curated (its gateway serves no catalogue)", () => {
-    assert.equal(providerUsesCuratedModelsOnly("codebuddy-intl"), true);
   });
 
   it("reads the roster from the CN gateway's enterprise endpoint", () => {
@@ -39,6 +40,27 @@ describe("codebuddy-cn model discovery", () => {
     // UA, and the CN realm wants the codebuddy.cn origin.
     assert.ok(config.headers["User-Agent"], "must send a User-Agent");
     assert.equal(config.headers["Origin"], "https://www.codebuddy.cn");
+  });
+
+  it("discovers codebuddy-intl too, but from /v3/config rather than the enterprise path", () => {
+    assert.equal(
+      providerUsesCuratedModelsOnly("codebuddy-intl"),
+      false,
+      "intl also serves a live catalogue; only its /console route is dead"
+    );
+    assert.equal(getDiscoveryClass("codebuddy-intl"), "openai-compat");
+
+    const config = PROVIDER_MODELS_CONFIG["codebuddy-intl"];
+    assert.ok(config, "codebuddy-intl must have a discovery entry");
+    assert.equal(config.url, "https://www.codebuddy.ai/v3/config");
+    assert.equal(config.method, "GET");
+    assert.equal(config.authHeader, "Authorization");
+    assert.equal(config.authPrefix, "Bearer ");
+    assert.equal(config.headers["X-Product"], "SaaS");
+    // The roster is UA-dependent: the desktop shape yields 26 chat models, the
+    // CLI shape only 20, and the registry's IDE shape none. Pin the desktop one.
+    assert.equal(config.headers["User-Agent"], "WorkBuddy/5.5.4 WorkBuddy AI/5.5.4 CLI/2.137.1");
+    assert.equal(config.headers["Origin"], "https://www.codebuddy.ai");
   });
 
   it("maps the catalogue to ids and names, dropping media-only models", () => {

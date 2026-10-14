@@ -383,19 +383,22 @@ function isWorkbuddyMediaModel(item: Record<string, unknown>): boolean {
 }
 
 /**
- * CodeBuddy CN catalogue — GET /console/enterprises/personal/models.
+ * CodeBuddy catalogue — shared shape behind both gateways.
  *
- * Verified live against copilot.tencent.com (2026-10-14): 32 entries, 31 usable
- * for chat once the one media-only model (`hunyuan-image-alpha`, tagged
- * `text-to-image`) is dropped. The registry's curated list carried only 16, so
- * half the roster was invisible to the dashboard.
+ * CN reads GET /console/enterprises/personal/models (verified live against
+ * copilot.tencent.com 2026-10-14: 32 entries, 31 usable for chat once the one
+ * media-only model `hunyuan-image-alpha` tagged `text-to-image` is dropped).
  *
- * Same media-tag exclusion as the WorkBuddy normalizer: the gateway mixes image
- * models into the same `models` array and only `tags` distinguishes them.
+ * Intl reads GET /v3/config (verified live against www.codebuddy.ai: 28 entries,
+ * 26 usable for chat after `gpt-image-2.5-sunburst` and `seedance-2.5` are
+ * dropped). The intl gateway has no /console/enterprises route — that path 500s
+ * from the edge there regardless of headers.
  *
- * Entries carry no explicit `owned_by`; they are all first-party CodeBuddy.
+ * Same media-tag exclusion as the WorkBuddy normalizer: these gateways mix image
+ * and video models into the same `models` array and only `tags` distinguishes
+ * them. Entries carry no explicit `owned_by`; they are all first-party CodeBuddy.
  */
-export function normalizeCodebuddyCnModelsResponse(
+function normalizeCodebuddyModelsResponse(
   data: unknown
 ): Array<{ id: string; name: string; owned_by: string }> {
   const root = asRecord(data);
@@ -418,6 +421,18 @@ export function normalizeCodebuddyCnModelsResponse(
       return { id, name, owned_by: "codebuddy" };
     })
     .filter((value): value is { id: string; name: string; owned_by: string } => Boolean(value));
+}
+
+export function normalizeCodebuddyCnModelsResponse(
+  data: unknown
+): Array<{ id: string; name: string; owned_by: string }> {
+  return normalizeCodebuddyModelsResponse(data);
+}
+
+export function normalizeCodebuddyIntlModelsResponse(
+  data: unknown
+): Array<{ id: string; name: string; owned_by: string }> {
+  return normalizeCodebuddyModelsResponse(data);
 }
 
 export function normalizeSapModelsResponse(
