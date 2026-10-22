@@ -127,6 +127,18 @@ jobs:
           echo "target=${TARGET}" >> "$GITHUB_OUTPUT"
           echo "Resolved version=${VERSION} target=${TARGET}"
 
+      - name: Add swap for the Next.js build
+        # Cushion for the 10 GB build heap above: a short RSS spike swaps instead
+        # of the kernel OOM-killing buildkit mid-compile.
+        run: |
+          set -euo pipefail
+          sudo swapoff -a || true
+          sudo fallocate -l 8G /mnt/omniroute-swap
+          sudo chmod 600 /mnt/omniroute-swap
+          sudo mkswap /mnt/omniroute-swap
+          sudo swapon /mnt/omniroute-swap
+          free -h
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
 
@@ -137,9 +149,12 @@ jobs:
           REGISTRY_IMAGE: ghcr.io/${{ github.repository_owner }}/omniroute
           # Build through the Dockerfile rather than a bare `next build` on the
           # runner: the builder stage already carries the hosted-runner memory
-          # budget (Dockerfile:198-231). Do not raise these — a next-build peaks
-          # at 14–16 GB RSS and the hosted box is killed mid-build.
-          OMNIROUTE_BUILD_MEMORY_MB: "6144"
+          # budget (Dockerfile:198-231). The heap was 6144 through v3.8.52; on
+          # v3.8.53 the webpack compile worker hit that ceiling ("JavaScript heap
+          # out of memory" at ~5.9 GB). Only that one process runs during compile
+          # (page-data workers start after it exits), so 10 GB fits the 16 GB
+          # runner. Keep WORKERS at 2: each page-data process is ~4.5 GB RSS.
+          OMNIROUTE_BUILD_MEMORY_MB: "10240"
           OMNIROUTE_BUILD_WORKERS: "2"
         run: |
           set -euo pipefail
